@@ -1,3 +1,14 @@
 [workspace]
 members = ["master", "worker"]
 resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1", features = [
+    "sync",
+    "macros",
+    "io-util",
+    "rt",
+    "time",
+] }
+actix-web = "4.9.0"
+anyhow = "1"
