@@ -22,6 +22,7 @@ pub struct Task {
     pub status: TaskStatus,
 }
 
+#[derive(Clone, Debug)]
 pub struct TaskManager {
     pub problem_generator: ProblemGenerator,
     pub tasks: Arc<RwLock<HashMap<String, Task>>>,
@@ -100,6 +101,24 @@ impl TaskManager {
         for id in to_remove {
             tasks.get_mut(&id).unwrap().status = TaskStatus::Pending;
         }
+        Ok(())
+    }
+
+    pub async fn job(self) -> anyhow::Result<()> {
+        let problem_generator = self.problem_generator.clone();
+        problem_generator.job().await;
+        actix_web::rt::spawn(async move {
+            loop {
+                match self.cleanup_tasks().await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Error cleaning up tasks: {:?}", e);
+                        break;
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            }
+        });
         Ok(())
     }
 }

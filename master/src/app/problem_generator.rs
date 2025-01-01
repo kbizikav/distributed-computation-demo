@@ -1,8 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use common::models::{Problem, Solution};
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, time::sleep};
 
+#[derive(Clone, Debug)]
 pub struct ProblemGenerator {
     pub problems: Arc<RwLock<HashMap<u64, Problem>>>,
     pub solutions: Arc<RwLock<HashMap<u64, Solution>>>,
@@ -47,5 +48,22 @@ impl ProblemGenerator {
             }
         }
         Ok(None)
+    }
+
+    pub async fn job(self) {
+        actix_web::rt::spawn(async move {
+            loop {
+                match self.generate_problem().await {
+                    Ok(_) => {
+                        log::info!("Problem generated");
+                    }
+                    Err(e) => {
+                        log::error!("Error generating problem: {:?}", e);
+                        break;
+                    }
+                }
+                sleep(Duration::from_secs(30)).await;
+            }
+        });
     }
 }
