@@ -1,59 +1,68 @@
 use actix_web::{
-    get, post,
+    post,
     web::{Data, Json},
-    HttpResponse, Result,
+    Error,
 };
-use common::models::{ApiError, HeartbeatRequest, TaskResponse, TaskSubmission};
+use common::models::{HeartbeatRequest, TaskResponse, TaskSubmission};
 
 use crate::app::task_manager::TaskManager;
 
-#[get("/task")]
-async fn get_task(task_manager: Data<TaskManager>) -> Result<HttpResponse> {
-    match task_manager.assign_task().await {
-        Ok(Some(task)) => {
-            let response = TaskResponse {
-                id: task.id,
-                problem: task.problem,
-            };
-            Ok(HttpResponse::Ok().json(response))
-        }
-        Ok(None) => Ok(HttpResponse::NoContent().finish()),
-        Err(_) => Ok(HttpResponse::InternalServerError().json(ApiError::InternalError)),
-    }
+#[post("/task/assign")]
+pub async fn assign_task(task_manager: Data<TaskManager>) -> Result<Json<TaskResponse>, Error> {
+    task_manager
+        .assign_task()
+        .await
+        .map(|opt_task| match opt_task {
+            Some(task) => {
+                let response = TaskResponse {
+                    id: task.id,
+                    problem: task.problem,
+                };
+                Ok(Json(response))
+            }
+            None => Err(actix_web::error::ErrorInternalServerError(
+                "No task available",
+            )),
+        })
+        .map_err(|_| actix_web::error::ErrorInternalServerError("Internal server error"))?
 }
 
 #[post("/task/submit")]
-async fn submit_task(
+pub async fn submit_task(
     task_manager: Data<TaskManager>,
     submission: Json<TaskSubmission>,
-) -> Result<HttpResponse> {
-    match task_manager
+) -> Result<Json<()>, Error> {
+    task_manager
         .submit_task(&submission.task_id, submission.x_squared)
         .await
-    {
-        Ok(_) => Ok(HttpResponse::Ok().finish()),
-        Err(_) => Ok(HttpResponse::NotFound().json(ApiError::TaskNotFound)),
-    }
+        .map(|_| Json(()))
+        .map_err(|_| actix_web::error::ErrorNotFound("Task not found"))
 }
 
 #[post("/task/heartbeat")]
-async fn submit_heartbeat(
+pub async fn submit_heartbeat(
     task_manager: Data<TaskManager>,
     heartbeat: Json<HeartbeatRequest>,
-) -> Result<HttpResponse> {
-    match task_manager
+) -> Result<Json<()>, Error> {
+    task_manager
         .submit_heartbeat(&heartbeat.task_id, heartbeat.progress)
         .await
-    {
-        Ok(_) => Ok(HttpResponse::Ok().finish()),
-        Err(e) => {
-            if e.to_string().contains("Task not found") {
-                Ok(HttpResponse::NotFound().json(ApiError::TaskNotFound))
-            } else if e.to_string().contains("Task is not assigned") {
-                Ok(HttpResponse::BadRequest().json(ApiError::InvalidTaskStatus))
+        .map(|_| Json(()))
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Task not found") {
+                actix_web::error::ErrorNotFound("Task not found")
+            } else if error_msg.contains("Task is not assigned") {
+                actix_web::error::ErrorBadRequest("Invalid task status")
             } else {
-                Ok(HttpResponse::InternalServerError().json(ApiError::InternalError))
+                actix_web::error::ErrorInternalServerError("Internal server error")
             }
-        }
-    }
+        })
+}
+
+pub fn task_scope() -> actix_web::Scope {
+    actix_web::web::scope("/task")
+        .service(assign_task)
+        .service(submit_task)
+        .service(submit_heartbeat)
 }

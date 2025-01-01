@@ -29,10 +29,3 @@ pub struct TaskResponse {
     pub id: String,
     pub problem: Problem,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ApiError {
-    TaskNotFound,
-    InvalidTaskStatus,
-    InternalError,
-}

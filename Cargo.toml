@@ -1,5 +1,5 @@
 [workspace]
-members = [ "common","master", "worker"]
+members = ["common", "master", "worker"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -13,3 +13,4 @@ tokio = { version = "1", features = [
 actix-web = "4.9.0"
 anyhow = "1"
 uuid = { version = "1.0", features = ["v4"] }
+thiserror = "2.0.9"
