@@ -8,3 +8,4 @@ common = { path = "../common" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
+actix-web = { workspace = true }
