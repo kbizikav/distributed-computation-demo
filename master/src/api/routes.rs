@@ -7,7 +7,7 @@ use common::models::{HeartbeatRequest, TaskResponse, TaskSubmission};
 
 use crate::app::task_manager::TaskManager;
 
-#[post("/task/assign")]
+#[post("/assign")]
 pub async fn assign_task(task_manager: Data<TaskManager>) -> Result<Json<TaskResponse>, Error> {
     task_manager
         .assign_task()
@@ -27,19 +27,19 @@ pub async fn assign_task(task_manager: Data<TaskManager>) -> Result<Json<TaskRes
         .map_err(|_| actix_web::error::ErrorInternalServerError("Internal server error"))?
 }
 
-#[post("/task/submit")]
+#[post("/submit")]
 pub async fn submit_task(
     task_manager: Data<TaskManager>,
     submission: Json<TaskSubmission>,
 ) -> Result<Json<()>, Error> {
     task_manager
-        .submit_task(&submission.task_id, submission.x_squared)
+        .submit_task(&submission.task_id, &submission.solution)
         .await
         .map(|_| Json(()))
         .map_err(|_| actix_web::error::ErrorNotFound("Task not found"))
 }
 
-#[post("/task/heartbeat")]
+#[post("/heartbeat")]
 pub async fn submit_heartbeat(
     task_manager: Data<TaskManager>,
     heartbeat: Json<HeartbeatRequest>,

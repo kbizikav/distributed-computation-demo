@@ -3,6 +3,7 @@ members = ["common", "master", "worker"]
 resolver = "2"
 
 [workspace.dependencies]
+actix-web = "4.9.0"
 tokio = { version = "1", features = [
     "sync",
     "macros",
@@ -10,7 +11,7 @@ tokio = { version = "1", features = [
     "rt",
     "time",
 ] }
-actix-web = "4.9.0"
 anyhow = "1"
 uuid = { version = "1.0", features = ["v4"] }
 thiserror = "2.0.9"
+serde = { version = "1.0.217", features = ["derive"] }

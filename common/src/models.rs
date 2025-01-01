@@ -21,7 +21,7 @@ pub struct HeartbeatRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TaskSubmission {
     pub task_id: String,
-    pub x_squared: u64,
+    pub solution: Solution,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

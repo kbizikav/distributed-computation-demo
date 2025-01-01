@@ -1,6 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use common::{constants::HEART_BEAT_TIMEOUT, models::Problem};
+use common::{
+    constants::HEART_BEAT_TIMEOUT,
+    models::{Problem, Solution},
+};
 use tokio::sync::RwLock;
 
 use super::{problem_generator::ProblemGenerator, utils::get_unix_timestamp};
@@ -52,12 +55,12 @@ impl TaskManager {
         }
     }
 
-    pub async fn submit_task(&self, id: &str, x_squared: u64) -> anyhow::Result<()> {
+    pub async fn submit_task(&self, id: &str, solution: &Solution) -> anyhow::Result<()> {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(id) {
             task.status = TaskStatus::Completed;
             self.problem_generator
-                .register_solution(task.problem.x, x_squared)
+                .register_solution(&task.problem, solution)
                 .await?;
             Ok(())
         } else {

@@ -24,15 +24,17 @@ impl ProblemGenerator {
         Ok(())
     }
 
-    pub async fn register_solution(&self, x: u64, x_squared: u64) -> anyhow::Result<()> {
+    pub async fn register_solution(
+        &self,
+        problem: &Problem,
+        solution: &Solution,
+    ) -> anyhow::Result<()> {
+        let x = problem.x;
         let is_problem_exist = self.problems.read().await.contains_key(&x);
         if !is_problem_exist {
             return Err(anyhow::anyhow!("Problem not found"));
         }
-        self.solutions
-            .write()
-            .await
-            .insert(x, Solution { x_squared });
+        self.solutions.write().await.insert(x, solution.clone());
         Ok(())
     }
 
