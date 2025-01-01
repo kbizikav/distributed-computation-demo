@@ -9,8 +9,8 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 actix-web = { workspace = true }
-dotenv = "0.15.0"
+dotenv = { workspace = true }
 serde = { workspace = true }
-envy = "0.4.2"
+envy = { workspace = true }
 env_logger = "0.11.6"
 log = "0.4.22"
