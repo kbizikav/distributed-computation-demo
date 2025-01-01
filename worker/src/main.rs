@@ -10,6 +10,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let env: EnvVar = envy::from_env()?;
     let client = TaskClient::new(env.master_server_url.to_string());
 
+    println!("Starting worker");
     if let Some(task) = client.assign_task().await? {
         println!("Assigned task: {:?}", task);
         let problem = task.problem;

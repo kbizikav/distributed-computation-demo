@@ -1,4 +1,8 @@
-use actix_web::{middleware::Logger, web::JsonConfig, App, HttpServer};
+use actix_web::{
+    middleware::Logger,
+    web::{Data, JsonConfig},
+    App, HttpServer,
+};
 use master::{
     api::routes::task_scope,
     app::{problem_generator::ProblemGenerator, task_manager::TaskManager},
@@ -31,11 +35,12 @@ async fn main() -> std::io::Result<()> {
     task_manager_for_job.job().await.unwrap();
 
     log::info!("Starting http server");
+    let data = Data::new(task_manager);
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::new("Request: %r | Status: %s | Duration: %Ts"))
             .app_data(JsonConfig::default().limit(35_000_000))
-            .app_data(task_manager.clone())
+            .app_data(data.clone())
             .service(task_scope())
     })
     .bind(format!("0.0.0.0:{}", env.port))?
