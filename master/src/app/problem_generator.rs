@@ -40,10 +40,14 @@ impl ProblemGenerator {
     }
 
     pub async fn get_unsolved_problem(&self) -> anyhow::Result<Option<Problem>> {
-        let problems = self.problems.read().await;
+        let problems = self.problems.read().await.clone();
+        let mut keys = problems.keys().cloned().collect::<Vec<u64>>();
+        keys.sort();
         let solutions = self.solutions.read().await;
-        for (x, problem) in problems.iter() {
-            if !solutions.contains_key(x) {
+
+        for x in keys {
+            if !solutions.contains_key(&x) {
+                let problem = problems.get(&x).unwrap();
                 return Ok(Some(problem.clone()));
             }
         }

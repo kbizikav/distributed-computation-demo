@@ -1,28 +1,21 @@
 use std::{error::Error, time::Duration};
 
-use common::models::Solution;
-use tokio::time::sleep;
-use worker::{client::TaskClient, EnvVar};
+use log::info;
+use worker::{worker::Worker, EnvVar};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv::dotenv().ok();
     let env: EnvVar = envy::from_env()?;
-    let client = TaskClient::new(env.master_server_url.to_string());
+    env_logger::builder()
+        .filter_level(log::LevelFilter::Info)
+        .init();
 
-    println!("Starting worker");
-    if let Some(task) = client.assign_task().await? {
-        println!("Assigned task: {:?}", task);
-        let problem = task.problem;
-        sleep(Duration::from_secs(3)).await;
-        client.submit_heartbeat(task.id.clone(), 0.5).await?;
-        let solution = Solution {
-            x_squared: problem.x * problem.x,
-        };
-        client.submit_solution(task.id, solution).await?;
-    } else {
-        println!("No task available");
+    let worker = Worker::new(env.master_server_url);
+    worker.job().await;
+    loop {
+        let task = worker.task.read().await;
+        info!("Worker status: {:?}", *task);
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
-
-    Ok(())
 }

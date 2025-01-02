@@ -99,6 +99,7 @@ impl TaskManager {
             }
         }
         for id in to_remove {
+            log::warn!("Task {} is removed due to heartbeat timeout", id);
             tasks.get_mut(&id).unwrap().status = TaskStatus::Pending;
         }
         Ok(())

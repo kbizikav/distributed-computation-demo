@@ -1,7 +1,8 @@
+use anyhow::Result;
 use common::models::{HeartbeatRequest, Solution, TaskResponse, TaskSubmission};
 use reqwest::Client;
-use std::error::Error;
 
+#[derive(Clone, Debug)]
 pub struct TaskClient {
     client: Client,
     base_url: String,
@@ -15,12 +16,14 @@ impl TaskClient {
         }
     }
 
-    pub async fn assign_task(&self) -> Result<Option<TaskResponse>, Box<dyn Error>> {
+    pub async fn assign_task(&self) -> Result<Option<TaskResponse>> {
         let response = self
             .client
             .post(format!("{}/task/assign", self.base_url))
             .send()
             .await?;
+
+        log::info!("Response: {:?}", response);
 
         match response.status() {
             reqwest::StatusCode::OK => Ok(Some(response.json().await?)),
@@ -29,18 +32,14 @@ impl TaskClient {
                 if error_text.contains("No task available") {
                     Ok(None)
                 } else {
-                    Err(error_text.into())
+                    Err(anyhow::anyhow!("Internal server error"))
                 }
             }
-            status => Err(format!("Unexpected status code: {}", status).into()),
+            status => anyhow::bail!("Unexpected status code: {}", status),
         }
     }
 
-    pub async fn submit_solution(
-        &self,
-        task_id: String,
-        solution: Solution,
-    ) -> Result<(), Box<dyn Error>> {
+    pub async fn submit_solution(&self, task_id: String, solution: Solution) -> Result<()> {
         let submission = TaskSubmission { task_id, solution };
         let response = self
             .client
@@ -50,16 +49,12 @@ impl TaskClient {
             .await?;
         match response.status() {
             reqwest::StatusCode::OK => Ok(()),
-            reqwest::StatusCode::NOT_FOUND => Err("Task not found".into()),
-            status => Err(format!("Unexpected status code: {}", status).into()),
+            reqwest::StatusCode::NOT_FOUND => anyhow::bail!("Task not found"),
+            status => anyhow::bail!("Unexpected status code: {}", status),
         }
     }
 
-    pub async fn submit_heartbeat(
-        &self,
-        task_id: String,
-        progress: f64,
-    ) -> Result<(), Box<dyn Error>> {
+    pub async fn submit_heartbeat(&self, task_id: String, progress: f64) -> Result<()> {
         let heartbeat = HeartbeatRequest { task_id, progress };
         let response = self
             .client
@@ -70,9 +65,9 @@ impl TaskClient {
 
         match response.status() {
             reqwest::StatusCode::OK => Ok(()),
-            reqwest::StatusCode::NOT_FOUND => Err("Task not found".into()),
-            reqwest::StatusCode::BAD_REQUEST => Err("Invalid task status".into()),
-            status => Err(format!("Unexpected status code: {}", status).into()),
+            reqwest::StatusCode::NOT_FOUND => anyhow::bail!("Task not found"),
+            reqwest::StatusCode::BAD_REQUEST => anyhow::bail!("Invalid task status"),
+            status => anyhow::bail!("Unexpected status code: {}", status),
         }
     }
 }
