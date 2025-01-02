@@ -105,9 +105,13 @@ impl TaskManager {
         Ok(())
     }
 
-    pub async fn job(self) -> anyhow::Result<()> {
-        let problem_generator = self.problem_generator.clone();
-        problem_generator.job().await;
+    pub async fn get_num_unsolved_problems(&self) -> anyhow::Result<usize> {
+        let problems = self.problem_generator.problems.read().await;
+        let solutions = self.problem_generator.solutions.read().await;
+        Ok(problems.len() - solutions.len())
+    }
+
+    pub async fn clean_up_job(self) {
         actix_web::rt::spawn(async move {
             loop {
                 match self.cleanup_tasks().await {
@@ -117,9 +121,19 @@ impl TaskManager {
                         break;
                     }
                 }
+                log::info!(
+                    "Unsolved problems: {}",
+                    self.get_num_unsolved_problems().await.unwrap()
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
         });
+    }
+
+    pub async fn job(self) -> anyhow::Result<()> {
+        let problem_generator = self.problem_generator.clone();
+        problem_generator.job().await;
+        self.clean_up_job().await;
         Ok(())
     }
 }
