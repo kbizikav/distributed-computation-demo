@@ -12,5 +12,6 @@ actix-web = { workspace = true }
 dotenv = { workspace = true }
 serde = { workspace = true }
 envy = { workspace = true }
+redis = { workspace = true }
 env_logger = "0.11.6"
 log = "0.4.22"

@@ -17,3 +17,4 @@ thiserror = "2.0.9"
 serde = { version = "1.0.217", features = ["derive"] }
 dotenv = "0.15.0"
 envy = "0.4.2"
+redis = { version = "0.23", features = ["tokio-comp"] }
