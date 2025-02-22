@@ -1,21 +1,41 @@
-use std::{error::Error, time::Duration};
-
-use log::info;
-use worker::{worker::Worker, EnvVar};
+use redis::Client;
+use tokio;
+use worker::worker::Worker;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    dotenv::dotenv().ok();
-    let env: EnvVar = envy::from_env()?;
-    env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .init();
+async fn main() -> anyhow::Result<()> {
+    // Redisクライアントの初期化
+    let client = Client::open("redis://127.0.0.1:6379")?;
 
-    let worker = Worker::new(env.master_server_url);
-    worker.job().await;
-    loop {
-        let task = worker.task.read().await;
-        info!("Worker status: {:?}", *task);
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
+    // Workerの初期化
+    let mut worker = Worker::new(&client)?;
+
+    // heartbeat送信用タスク
+    let worker_id = worker.worker_id.clone();
+    let heartbeat_client = client.clone();
+    let heartbeat_handle = tokio::spawn(async move {
+        let mut heartbeat_worker = Worker {
+            conn: heartbeat_client.get_connection().unwrap(),
+            worker_id: worker_id,
+        };
+
+        loop {
+            if let Err(e) = heartbeat_worker.send_heartbeat() {
+                eprintln!("Heartbeat error: {}", e);
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        }
+    });
+
+    // メインのタスク処理ループ
+    let worker_handle = tokio::spawn(async move {
+        if let Err(e) = worker.start() {
+            eprintln!("Worker error: {}", e);
+        }
+    });
+
+    // 全てのタスクの完了を待つ
+    tokio::try_join!(heartbeat_handle, worker_handle)?;
+
+    Ok(())
 }

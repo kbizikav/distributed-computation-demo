@@ -1,49 +1,50 @@
-use actix_web::{
-    middleware::Logger,
-    web::{Data, JsonConfig},
-    App, HttpServer,
-};
-use master::{
-    api::routes::task_scope,
-    app::{problem_generator::ProblemGenerator, task_manager::TaskManager},
-    EnvVar,
-};
-use std::io::{self};
+use master::app::{producer::Producer, supervisor::Supervisor};
+use redis::Client;
+use std::error::Error;
+use tokio;
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    dotenv::dotenv().ok();
-    env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .init();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    // Redisクライアントの初期化
+    let client = Client::open("redis://127.0.0.1:6379")?;
+    let task_count = 100;
 
-    let env: EnvVar = envy::from_env().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("Failed to parse environment variables: {}", e),
-        )
-    })?;
+    // Producer、Supervisorの初期化
+    let mut producer = Producer::new(&client)?;
+    let mut supervisor = Supervisor::new(&client)?;
 
-    log::info!("Starting master server");
+    // Supervisorを別タスクで実行
+    let supervisor_handle = tokio::spawn(async move {
+        if let Err(e) = supervisor.check_workers() {
+            eprintln!("Supervisor error: {}", e);
+        }
+    });
 
-    let problem_generator = ProblemGenerator::new().await.unwrap();
-    let task_manager = TaskManager::new(problem_generator).await.unwrap();
+    // タスク生成用タスク
+    let task_generator_handle = tokio::spawn(async move {
+        for i in 0..task_count {
+            if let Err(e) = producer.create_task(format!("Task data {}", i)) {
+                eprintln!("Failed to create task {}: {}", i, e);
+                continue;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    });
 
-    let task_manager_for_job = task_manager.clone();
+    // 結果処理用タスク
+    let mut result_processor = Producer::new(&client)?;
+    let result_processor_handle = tokio::spawn(async move {
+        if let Err(e) = result_processor.process_results() {
+            eprintln!("Result processor error: {}", e);
+        }
+    });
 
-    log::info!("Starting task manager job");
-    task_manager_for_job.job().await.unwrap();
+    // 全てのタスクの完了を待つ
+    tokio::try_join!(
+        supervisor_handle,
+        task_generator_handle,
+        result_processor_handle,
+    )?;
 
-    log::info!("Starting http server");
-    let data = Data::new(task_manager);
-    HttpServer::new(move || {
-        App::new()
-            .wrap(Logger::new("Request: %r | Status: %s | Duration: %Ts"))
-            .app_data(JsonConfig::default().limit(35_000_000))
-            .app_data(data.clone())
-            .service(task_scope())
-    })
-    .bind(format!("0.0.0.0:{}", env.port))?
-    .run()
-    .await
+    Ok(())
 }

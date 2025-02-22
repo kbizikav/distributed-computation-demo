@@ -1,106 +1,76 @@
-use std::{sync::Arc, time::Duration};
+use std::thread;
+use std::time::Duration;
 
-use crate::client::TaskClient;
-use common::{
-    constants::HEART_BEAT_INTERVAL,
-    models::{Problem, Solution},
-};
-use tokio::{sync::RwLock, time::sleep};
+use common::models::{Task, TaskResult};
+use redis::Commands;
+use redis::{Client, Connection};
+use uuid::Uuid;
 
-#[derive(Clone, Debug)]
-pub struct TaskProgress {
-    pub task_id: String,
-    pub progress: f64,
-    pub problem: Problem,
-    pub solution: Option<Solution>,
-}
-
-#[derive(Clone, Debug)]
+// Worker実装
 pub struct Worker {
-    client: TaskClient,
-    pub task: Arc<RwLock<Option<TaskProgress>>>,
+    pub conn: Connection,
+    pub worker_id: String,
 }
 
 impl Worker {
-    pub fn new(master_server_url: String) -> Self {
-        Self {
-            client: TaskClient::new(master_server_url),
-            task: Arc::new(RwLock::new(None)),
+    pub fn new(client: &Client) -> redis::RedisResult<Worker> {
+        Ok(Worker {
+            conn: client.get_connection()?,
+            worker_id: Uuid::new_v4().to_string(),
+        })
+    }
+
+    pub fn start(&mut self) -> redis::RedisResult<()> {
+        loop {
+            self.send_heartbeat()?;
+
+            // ZRANGEBYSCOREコマンド: 優先度の高いタスクを1つ取得
+            let tasks: Vec<String> = self.conn.zrangebyscore("tasks", 0f64, "+inf")?;
+
+            if tasks.is_empty() {
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+
+            let task: Task = serde_json::from_str(&tasks[0]).unwrap();
+
+            // ZREMコマンド: タスクキューからタスクを削除
+            self.conn.zrem::<_, _, ()>("tasks", &tasks[0])?;
+
+            // HSETコマンド: 処理中タスクとして登録
+            let now = chrono::Utc::now().timestamp() as u64;
+            self.conn.hset::<_, _, _, ()>(
+                "processing_tasks",
+                task.id.to_string(),
+                format!("{}:{}", self.worker_id, now),
+            )?;
+
+            // タスク処理をシミュレート
+            thread::sleep(Duration::from_secs(5));
+
+            // 結果を保存
+            let result = TaskResult {
+                task_id: task.id,
+                result: format!("Result for task {}", task.id),
+            };
+            let result_json = serde_json::to_string(&result).unwrap();
+
+            // ZADDコマンド: 結果をID順に保存
+            self.conn
+                .zadd::<_, _, _, ()>("results", result_json, task.id as f64)?;
+
+            // HDELコマンド: 処理中タスクから削除
+            self.conn
+                .hdel::<_, _, ()>("processing_tasks", task.id.to_string())?;
         }
     }
 
-    async fn solve_task(&self) {
-        if self.task.read().await.is_none() {
-            let task = self.client.assign_task().await.unwrap();
-            if let Some(task) = task {
-                *self.task.write().await = Some(TaskProgress {
-                    task_id: task.id.clone(),
-                    progress: 0.0,
-                    problem: task.problem,
-                    solution: None,
-                });
-            }
-        }
-        let task = self.task.read().await.clone().unwrap();
-        sleep(Duration::from_secs(10)).await; // Simulate work
-        *self.task.write().await = Some(TaskProgress {
-            task_id: task.task_id.clone(),
-            progress: 0.5,
-            problem: task.problem.clone(),
-            solution: None,
-        }); // update progress
-        sleep(Duration::from_secs(10)).await; // Simulate work
-        let solution = Solution {
-            x_squared: task.problem.x * task.problem.x,
-        };
-        *self.task.write().await = Some(TaskProgress {
-            task_id: task.task_id.clone(),
-            progress: 1.0,
-            problem: task.problem.clone(),
-            solution: Some(solution),
-        });
-    }
+    pub fn send_heartbeat(&mut self) -> redis::RedisResult<()> {
+        let now = chrono::Utc::now().timestamp() as u64;
 
-    async fn solve_task_job(self) {
-        tokio::spawn(async move {
-            loop {
-                self.solve_task().await;
-                sleep(Duration::from_secs(10)).await;
-            }
-        });
-    }
-
-    async fn submit(&self) {
-        let task = self.task.read().await.clone();
-        if let Some(task) = task {
-            if let Some(solution) = task.solution {
-                // submit solution if task is completed
-                self.client
-                    .submit_solution(task.task_id.clone(), solution)
-                    .await
-                    .unwrap();
-                *self.task.write().await = None;
-            } else {
-                // submit heartbeat if task is in progress
-                self.client
-                    .submit_heartbeat(task.task_id.clone(), task.progress)
-                    .await
-                    .unwrap();
-            }
-        }
-    }
-
-    async fn submit_job(self) {
-        tokio::spawn(async move {
-            loop {
-                self.submit().await;
-                sleep(Duration::from_secs(HEART_BEAT_INTERVAL)).await;
-            }
-        });
-    }
-
-    pub async fn job(&self) {
-        self.clone().solve_task_job().await;
-        self.clone().submit_job().await;
+        // HSETコマンド: ワーカーのheartbeatを更新
+        self.conn
+            .hset::<_, _, _, ()>("worker_heartbeats", &self.worker_id, now)?;
+        Ok(())
     }
 }
