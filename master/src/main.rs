@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Supervisorを別タスクで実行
     let supervisor_handle = tokio::spawn(async move {
-        if let Err(e) = supervisor.check_workers() {
+        if let Err(e) = supervisor.cleanup_inactive_workers() {
             eprintln!("Supervisor error: {}", e);
         }
     });

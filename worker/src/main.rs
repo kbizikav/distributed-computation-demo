@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     let heartbeat_handle = tokio::spawn(async move {
         let mut heartbeat_worker = Worker {
             conn: heartbeat_client.get_connection().unwrap(),
-            worker_id: worker_id,
+            worker_id,
         };
 
         loop {
