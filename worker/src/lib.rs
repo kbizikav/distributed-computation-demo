@@ -4,5 +4,5 @@ pub mod worker;
 
 #[derive(Deserialize)]
 pub struct EnvVar {
-    pub master_server_url: String,
+    pub redis_url: String,
 }
