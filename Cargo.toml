@@ -1,6 +1,5 @@
 [workspace]
-# members = ["common", "master", "worker"]
-members = ["common", "master"]
+members = ["common", "master", "worker"]
 resolver = "2"
 
 [workspace.dependencies]

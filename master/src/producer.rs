@@ -52,6 +52,9 @@ impl Producer {
     }
 
     pub async fn run(&self) {
+        // clean up
+        self.manager.clear_all().await.unwrap();
+
         let manager = self.manager.clone();
         let supervisor_handle = tokio::spawn(async move {
             if let Err(e) = manager.cleanup_inactive_workers().await {
@@ -62,6 +65,7 @@ impl Producer {
         let manager = self.manager.clone();
         let task_generator_handle = tokio::spawn(async move {
             for i in 0..100 {
+                log::info!("Adding task {}", i);
                 if let Err(e) = manager.add_task(i, &Task { task_id: i, x: i }).await {
                     eprintln!("Failed to create task {}: {}", i, e);
                     continue;
@@ -86,6 +90,8 @@ impl Producer {
                 eprintln!("Result processor error: {}", e);
             }
         });
+
+        log::info!("Producer started");
 
         tokio::try_join!(
             supervisor_handle,
