@@ -1,8 +1,8 @@
 use serde::Deserialize;
 
-pub mod app;
+pub mod producer;
 
 #[derive(Deserialize)]
 pub struct EnvVar {
-    pub port: String,
+    pub redis_url: String,
 }

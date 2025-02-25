@@ -63,6 +63,28 @@ impl TaskManager {
         Ok(())
     }
 
+    pub async fn get_result(&self) -> Result<Option<TaskResult>> {
+        let mut conn = self.get_connection().await?;
+        let key = format!("{}:results", self.prefix);
+        let result: Option<(String, f64)> = conn
+            .zpopmin::<_, Vec<(String, f64)>>(key, 1)
+            .await?
+            .into_iter()
+            .next();
+        if let Some((result_json, _)) = result {
+            Ok(Some(serde_json::from_str(&result_json)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn remove_result(&self, task_id: u32) -> Result<()> {
+        let mut conn = self.get_connection().await?;
+        let key = format!("{}:results", self.prefix);
+        conn.zrem::<_, _, ()>(key, task_id as f64).await?;
+        Ok(())
+    }
+
     // assign task to worker if available
     pub async fn assign_task(&self, worker_id: &str) -> Result<Option<(u32, Task)>> {
         let mut conn = self.get_connection().await?;
@@ -172,8 +194,8 @@ mod tests {
     async fn test_add_task() {
         let task_manager = TaskManager::new("redis://localhost:6379", "test", 60, 3)
             .expect("Failed to create TaskManager");
-        let task = Task { x: 42 };
-        task_manager.add_task(1, &task).await.unwrap();
+        let task = Task { task_id: 1, x: 42 };
+        task_manager.add_task(task.task_id, &task).await.unwrap();
 
         task_manager.clear_all().await.unwrap();
 

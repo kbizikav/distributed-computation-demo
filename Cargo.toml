@@ -1,5 +1,6 @@
 [workspace]
-members = ["common", "master", "worker"]
+# members = ["common", "master", "worker"]
+members = ["common", "master"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -12,3 +13,4 @@ serde = { version = "1.0.217", features = ["derive"] }
 dotenv = "0.15.0"
 envy = "0.4.2"
 redis = { version = "0.23", features = ["tokio-comp"] }
+serde_json = "1.0.139"
