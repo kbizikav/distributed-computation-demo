@@ -9,6 +9,7 @@ thiserror = { workspace = true }
 redis = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 testcontainers = "0.15"
