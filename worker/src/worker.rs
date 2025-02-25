@@ -16,7 +16,7 @@ pub struct Worker {
 impl Worker {
     pub fn new(env: &EnvVar) -> anyhow::Result<Worker> {
         let worker_id = Uuid::new_v4().to_string();
-        let manager = TaskManager::new(&env.redis_url, "worker", 600, 10)?;
+        let manager = TaskManager::new(&env.redis_url, "task_manager", 600, 10)?;
         Ok(Worker {
             worker_id,
             manager: Arc::new(manager),

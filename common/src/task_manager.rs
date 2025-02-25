@@ -194,14 +194,34 @@ mod tests {
     async fn test_add_task() {
         let task_manager = TaskManager::new("redis://localhost:6379", "test", 60, 3)
             .expect("Failed to create TaskManager");
-        let task = Task { task_id: 1, x: 42 };
-        task_manager.add_task(task.task_id, &task).await.unwrap();
 
         task_manager.clear_all().await.unwrap();
 
-        let worker_id = Uuid::new_v4().to_string();
+        for i in 0..10 {
+            let task = Task { task_id: i, x: i };
+            task_manager.add_task(task.task_id, &task).await.unwrap();
+        }
 
-        let task = task_manager.assign_task(&worker_id).await.unwrap();
-        dbg!(&task);
+        let worker_id = Uuid::new_v4().to_string();
+        for _ in 0..10 {
+            let task = task_manager.assign_task(&worker_id).await.unwrap();
+
+            let task: Task = task.unwrap().1;
+            let task_result = TaskResult {
+                task_id: task.task_id,
+                x_squared: task.x * task.x,
+            };
+            task_manager
+                .complete_task(&worker_id, task.task_id, &task_result)
+                .await
+                .unwrap();
+        }
+
+        for i in 0..10 {
+            let result = task_manager.get_result().await.unwrap();
+            let result = result.unwrap();
+            assert_eq!(result.task_id, i);
+            assert_eq!(result.x_squared, i * i);
+        }
     }
 }

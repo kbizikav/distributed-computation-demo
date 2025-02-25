@@ -12,7 +12,7 @@ pub struct Producer {
 
 impl Producer {
     pub fn new(env: &EnvVar) -> anyhow::Result<Producer> {
-        let manager = TaskManager::new(&env.redis_url, "producer", 600, 10)?;
+        let manager = TaskManager::new(&env.redis_url, "task_manager", 600, 10)?;
         Ok(Producer {
             manager: Arc::new(manager),
             results: Arc::new(Mutex::new(Vec::new())),
