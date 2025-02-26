@@ -36,7 +36,7 @@ impl Worker {
 
             log::info!("Processing task {}", task.task_id);
 
-            thread::sleep(Duration::from_secs(rand::random::<u64>() % 10));
+            thread::sleep(Duration::from_secs(rand::random::<u64>() % 20));
 
             let result = TaskResult {
                 task_id: task.task_id,

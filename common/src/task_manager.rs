@@ -67,7 +67,7 @@ impl TaskManager {
         let mut conn = self.get_connection().await?;
         let key = format!("{}:results", self.prefix);
         let result: Option<(String, f64)> = conn
-            .zpopmin::<_, Vec<(String, f64)>>(key, 1)
+            .zrange_withscores::<_, Vec<(String, f64)>>(key, 0, 0)
             .await?
             .into_iter()
             .next();

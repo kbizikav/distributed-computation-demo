@@ -37,6 +37,7 @@ impl Producer {
                     expected_task_id,
                     result.task_id
                 );
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 continue;
             }
 
