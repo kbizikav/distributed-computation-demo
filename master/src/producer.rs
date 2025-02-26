@@ -32,22 +32,20 @@ impl Producer {
             let expected_task_id = self.results.lock().unwrap().len() as u32;
 
             if result.task_id != expected_task_id {
-                println!(
+                log::error!(
                     "Unexpected task ID: expected {}, got {}",
-                    expected_task_id, result.task_id
+                    expected_task_id,
+                    result.task_id
                 );
                 continue;
             }
 
             // store result
             self.results.lock().unwrap().push(result.clone());
-            println!(
-                "Processing result for task {}: {}",
-                result.task_id, result.x_squared
-            );
+            println!("Result processed for task {}", result.task_id,);
 
             // remove results
-            self.manager.remove_result(result.task_id).await?;
+            self.manager.remove_result(&result).await?;
         }
     }
 

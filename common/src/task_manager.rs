@@ -78,10 +78,11 @@ impl TaskManager {
         }
     }
 
-    pub async fn remove_result(&self, task_id: u32) -> Result<()> {
+    pub async fn remove_result(&self, result: &TaskResult) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let key = format!("{}:results", self.prefix);
-        conn.zrem::<_, _, ()>(key, task_id as f64).await?;
+        let result_json = serde_json::to_string(result)?;
+        conn.zrem::<_, _, ()>(key, result_json).await?;
         Ok(())
     }
 
@@ -109,7 +110,7 @@ impl TaskManager {
             conn.expire::<_, ()>(&key, self.ttl).await?;
 
             // remove task from tasks list
-            conn.zrem::<_, _, ()>(&task_key, task_id).await?;
+            conn.zrem::<_, _, ()>(&task_key, task_json).await?;
 
             Ok(Some((task_id as u32, task)))
         } else {
