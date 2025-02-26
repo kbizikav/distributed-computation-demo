@@ -13,7 +13,7 @@ envy = { workspace = true }
 anyhow = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
-log = "0.4.22"
+log = { workspace = true }
 env_logger = "0.11.6"
 uuid.workspace = true
 chrono = "0.4.39"

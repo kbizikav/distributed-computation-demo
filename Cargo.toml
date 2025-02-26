@@ -13,3 +13,4 @@ dotenv = "0.15.0"
 envy = "0.4.2"
 redis = { version = "0.23", features = ["tokio-comp"] }
 serde_json = "1.0.139"
+log = "0.4.22"

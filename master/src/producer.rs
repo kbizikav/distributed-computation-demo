@@ -12,7 +12,7 @@ pub struct Producer {
 
 impl Producer {
     pub fn new(env: &EnvVar) -> anyhow::Result<Producer> {
-        let manager = TaskManager::new(&env.redis_url, "task_manager", 600, 10)?;
+        let manager = TaskManager::new(&env.redis_url, "task_manager", 600, 5)?;
         Ok(Producer {
             manager: Arc::new(manager),
             results: Arc::new(Mutex::new(Vec::new())),
@@ -70,7 +70,7 @@ impl Producer {
                     eprintln!("Failed to create task {}: {}", i, e);
                     continue;
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
             }
         });
 

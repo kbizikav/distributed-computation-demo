@@ -164,14 +164,17 @@ impl TaskManager {
                 let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
 
                 // re-queue tasks
-                let tasks: Vec<(String, f64)> =
-                    conn.zrangebyscore(&worker_key, 0.0, "+inf").await?;
+                let tasks: Vec<(String, f64)> = conn
+                    .zrangebyscore_withscores(&worker_key, 0.0, "+inf")
+                    .await?;
                 for (task_json, task_id) in tasks {
                     let key = format!("{}:tasks", self.prefix);
                     conn.zadd::<_, _, _, ()>(&key, task_json, task_id).await?;
 
                     // set expiration
                     conn.expire::<_, ()>(&key, self.ttl).await?;
+
+                    log::info!("Re-queued task {} from worker {}", task_id, worker_id);
                 }
 
                 // remove worker
