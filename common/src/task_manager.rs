@@ -1,7 +1,40 @@
-use redis::{aio::Connection, AsyncCommands as _, Client};
+// Data Structure in Redis:
+//
+// 1. Tasks Queue:
+//    - Key: {prefix}:tasks
+//    - Type: Sorted Set
+//    - Members: task_json (serialized Task objects)
+//    - Scores: task_id
+//    - TTL: {ttl} seconds
+//
+// 2. Worker Assigned Tasks:
+//    - Key: {prefix}:worker:{worker_id}
+//    - Type: Sorted Set
+//    - Members: task_json (serialized Task objects)
+//    - Scores: task_id
+//    - TTL: {ttl} seconds
+//
+// 3. Task Results:
+//    - Key: {prefix}:result:{task_id}
+//    - Type: String
+//    - Value: result_json (serialized TaskResult object)
+//    - TTL: {ttl} seconds
+//
+// 4. Worker Heartbeats:
+//    - Key: {prefix}:heartbeat:{worker_id}
+//    - Type: String
+//    - Value: "" (empty string)
+//    - TTL: {heartbeat_ttl} seconds
+//
+// Flow:
+// - Tasks are initially added to the tasks queue
+// - Workers request tasks which are moved from tasks queue to worker's task list
+// - When tasks are completed, they are removed from worker's list and results are stored
+// - Workers send heartbeats to indicate they are still active
+// - Inactive workers have their tasks re-queued back to the tasks queue
 
 use crate::models::{Task, TaskResult};
-
+use redis::{aio::Connection, AsyncCommands as _, Client};
 type Result<T> = std::result::Result<T, TaskManagerError>;
 
 #[derive(thiserror::Error, Debug)]

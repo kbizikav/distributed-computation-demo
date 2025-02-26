@@ -1,4 +1,3 @@
-use tokio;
 use worker::worker::Worker;
 
 #[tokio::main]
