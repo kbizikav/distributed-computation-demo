@@ -21,32 +21,23 @@ impl Producer {
 
     pub async fn process_results(&self) -> anyhow::Result<()> {
         loop {
-            let result = match self.manager.get_result().await? {
+            let next_task_id = self.results.lock().unwrap().len() as u32;
+
+            let result = match self.manager.get_result(next_task_id).await? {
                 Some(result) => result,
                 None => {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    log::warn!("No result found for task {}", next_task_id);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                     continue;
                 }
             };
-
-            let expected_task_id = self.results.lock().unwrap().len() as u32;
-
-            if result.task_id != expected_task_id {
-                log::error!(
-                    "Unexpected task ID: expected {}, got {}",
-                    expected_task_id,
-                    result.task_id
-                );
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                continue;
-            }
 
             // store result
             self.results.lock().unwrap().push(result.clone());
             println!("Result processed for task {}", result.task_id,);
 
             // remove results
-            self.manager.remove_result(&result).await?;
+            self.manager.remove_result(result.task_id).await?;
         }
     }
 

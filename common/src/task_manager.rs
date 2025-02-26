@@ -63,26 +63,23 @@ impl TaskManager {
         Ok(())
     }
 
-    pub async fn get_result(&self) -> Result<Option<TaskResult>> {
+    pub async fn get_result(&self, task_id: u32) -> Result<Option<TaskResult>> {
         let mut conn = self.get_connection().await?;
-        let key = format!("{}:results", self.prefix);
-        let result: Option<(String, f64)> = conn
-            .zrange_withscores::<_, Vec<(String, f64)>>(key, 0, 0)
-            .await?
-            .into_iter()
-            .next();
-        if let Some((result_json, _)) = result {
-            Ok(Some(serde_json::from_str(&result_json)?))
-        } else {
-            Ok(None)
+        let key = format!("{}:result:{}", self.prefix, task_id);
+
+        let exists: bool = conn.exists(&key).await?;
+        if !exists {
+            return Ok(None);
         }
+
+        let result_json: String = conn.get(&key).await?;
+        Ok(Some(serde_json::from_str(&result_json)?))
     }
 
-    pub async fn remove_result(&self, result: &TaskResult) -> Result<()> {
+    pub async fn remove_result(&self, task_id: u32) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        let key = format!("{}:results", self.prefix);
-        let result_json = serde_json::to_string(result)?;
-        conn.zrem::<_, _, ()>(key, result_json).await?;
+        let key = format!("{}:result:{}", self.prefix, task_id);
+        conn.del::<_, ()>(key).await?;
         Ok(())
     }
 
@@ -132,14 +129,13 @@ impl TaskManager {
         let task_json = serde_json::to_string(task)?;
         conn.zrem::<_, _, ()>(worker_key, task_json).await?;
 
-        // add result to sorted set
-        let results_key = format!("{}:results", self.prefix);
-        let member = serde_json::to_string(result)?;
-        conn.zadd::<_, _, _, ()>(&results_key, member, task_id as f64)
-            .await?;
+        // add result
+        let result_key = format!("{}:result:{}", self.prefix, task_id);
+        let result_json = serde_json::to_string(result)?;
+        conn.set::<_, _, ()>(&result_key, result_json).await?;
 
         // set expiration
-        conn.expire::<_, ()>(&results_key, self.ttl).await?;
+        conn.expire::<_, ()>(&result_key, self.ttl).await?;
 
         Ok(())
     }
@@ -230,7 +226,7 @@ mod tests {
         }
 
         for i in 0..10 {
-            let result = task_manager.get_result().await.unwrap();
+            let result = task_manager.get_result(i).await.unwrap();
             let result = result.unwrap();
             assert_eq!(result.task_id, i);
             assert_eq!(result.x_squared, i * i);
