@@ -121,13 +121,15 @@ impl TaskManager {
         &self,
         worker_id: &str,
         task_id: u32,
+        task: &Task,
         result: &TaskResult,
     ) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
         // remove task from worker's list
         let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
-        conn.zrem::<_, _, ()>(worker_key, task_id).await?;
+        let task_json = serde_json::to_string(task)?;
+        conn.zrem::<_, _, ()>(worker_key, task_json).await?;
 
         // add result to sorted set
         let results_key = format!("{}:results", self.prefix);
@@ -153,40 +155,6 @@ impl TaskManager {
         Ok(())
     }
 
-    // // remove inactive workers and re-queue their tasks
-    // pub async fn cleanup_inactive_workers(&self) -> Result<()> {
-    //     let mut conn = self.get_connection().await?;
-
-    //     let keys: Vec<String> = conn
-    //         .keys(format!("{}:worker:heartbeat:*", self.prefix))
-    //         .await?;
-    //     for key in keys {
-    //         let ttl: i64 = conn.ttl(&key).await?;
-    //         if ttl < 0 {
-    //             let worker_id = key.split(':').last().unwrap();
-    //             let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
-
-    //             // re-queue tasks
-    //             let tasks: Vec<(String, f64)> = conn
-    //                 .zrangebyscore_withscores(&worker_key, 0.0, "+inf")
-    //                 .await?;
-    //             for (task_json, task_id) in tasks {
-    //                 let key = format!("{}:tasks", self.prefix);
-    //                 conn.zadd::<_, _, _, ()>(&key, task_json, task_id).await?;
-
-    //                 // set expiration
-    //                 conn.expire::<_, ()>(&key, self.ttl).await?;
-
-    //                 log::info!("Re-queued task {} from worker {}", task_id, worker_id);
-    //             }
-
-    //             // remove worker
-    //             conn.del::<_, ()>(worker_key).await?;
-    //         }
-    //     }
-    //     Ok(())
-    // }
-
     // remove inactive workers and re-queue their tasks
     pub async fn cleanup_inactive_workers(&self) -> Result<()> {
         let mut conn = self.get_connection().await?;
@@ -205,11 +173,7 @@ impl TaskManager {
                 // re-queue tasks
                 let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
                 let tasks: Vec<(String, f64)> = conn
-                    .zrangebyscore_withscores(
-                        &worker_key,
-                        0.0,
-                        "+inf",
-                    )
+                    .zrangebyscore_withscores(&worker_key, 0.0, "+inf")
                     .await?;
                 for (task_json, task_id) in tasks {
                     let key = format!("{}:tasks", self.prefix);
@@ -259,7 +223,7 @@ mod tests {
                 x_squared: task.x * task.x,
             };
             task_manager
-                .complete_task(&worker_id, task.task_id, &task_result)
+                .complete_task(&worker_id, task.task_id, &task, &task_result)
                 .await
                 .unwrap();
         }

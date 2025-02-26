@@ -44,7 +44,7 @@ impl Worker {
             };
 
             self.manager
-                .complete_task(&self.worker_id, task_id, &result)
+                .complete_task(&self.worker_id, task_id, &task, &result)
                 .await?;
             println!("Processed task {}", task.task_id);
         }
