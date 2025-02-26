@@ -7,7 +7,9 @@ async fn main() -> anyhow::Result<()> {
         .filter_level(log::LevelFilter::Info)
         .init();
     let env = envy::from_env::<worker::EnvVar>()?;
+
     let worker = Worker::new(&env)?;
     worker.run().await;
+
     Ok(())
 }

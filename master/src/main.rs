@@ -9,7 +9,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
     let env = envy::from_env::<master::EnvVar>()?;
 
-    // Producer、Supervisorの初期化
     let producer = Producer::new(&env)?;
     producer.run().await;
 
