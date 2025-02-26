@@ -93,7 +93,7 @@ impl TaskManager {
 
         // get task from sorted set
         let task: Option<(String, f64)> = conn
-            .zpopmin::<_, Vec<(String, f64)>>(task_key, 1)
+            .zpopmin::<_, Vec<(String, f64)>>(&task_key, 1)
             .await?
             .into_iter()
             .next();
@@ -107,6 +107,9 @@ impl TaskManager {
 
             // set expiration
             conn.expire::<_, ()>(&key, self.ttl).await?;
+
+            // remove task from tasks list
+            conn.zrem::<_, _, ()>(&task_key, task_id).await?;
 
             Ok(Some((task_id as u32, task)))
         } else {
@@ -141,7 +144,7 @@ impl TaskManager {
     pub async fn submit_heartbeat(&self, worker_id: &str) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let key = format!("{}:worker:heartbeat:{}", self.prefix, worker_id);
+        let key = format!("{}:heartbeat:{}", self.prefix, worker_id);
         conn.set::<_, _, ()>(&key, "").await?;
 
         // set expiration
@@ -150,22 +153,63 @@ impl TaskManager {
         Ok(())
     }
 
+    // // remove inactive workers and re-queue their tasks
+    // pub async fn cleanup_inactive_workers(&self) -> Result<()> {
+    //     let mut conn = self.get_connection().await?;
+
+    //     let keys: Vec<String> = conn
+    //         .keys(format!("{}:worker:heartbeat:*", self.prefix))
+    //         .await?;
+    //     for key in keys {
+    //         let ttl: i64 = conn.ttl(&key).await?;
+    //         if ttl < 0 {
+    //             let worker_id = key.split(':').last().unwrap();
+    //             let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
+
+    //             // re-queue tasks
+    //             let tasks: Vec<(String, f64)> = conn
+    //                 .zrangebyscore_withscores(&worker_key, 0.0, "+inf")
+    //                 .await?;
+    //             for (task_json, task_id) in tasks {
+    //                 let key = format!("{}:tasks", self.prefix);
+    //                 conn.zadd::<_, _, _, ()>(&key, task_json, task_id).await?;
+
+    //                 // set expiration
+    //                 conn.expire::<_, ()>(&key, self.ttl).await?;
+
+    //                 log::info!("Re-queued task {} from worker {}", task_id, worker_id);
+    //             }
+
+    //             // remove worker
+    //             conn.del::<_, ()>(worker_key).await?;
+    //         }
+    //     }
+    //     Ok(())
+    // }
+
     // remove inactive workers and re-queue their tasks
     pub async fn cleanup_inactive_workers(&self) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let keys: Vec<String> = conn
-            .keys(format!("{}:worker:heartbeat:*", self.prefix))
-            .await?;
-        for key in keys {
+        let worker_ids: Vec<String> = conn
+            .keys::<_, Vec<String>>(format!("{}:worker:*", self.prefix))
+            .await?
+            .into_iter()
+            .map(|key| key.split(':').last().unwrap().to_string())
+            .collect();
+
+        for worker_id in worker_ids {
+            let key = format!("{}:heartbeat:{}", self.prefix, worker_id);
             let ttl: i64 = conn.ttl(&key).await?;
             if ttl < 0 {
-                let worker_id = key.split(':').last().unwrap();
-                let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
-
                 // re-queue tasks
+                let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
                 let tasks: Vec<(String, f64)> = conn
-                    .zrangebyscore_withscores(&worker_key, 0.0, "+inf")
+                    .zrangebyscore_withscores(
+                        &worker_key,
+                        0.0,
+                        "+inf",
+                    )
                     .await?;
                 for (task_json, task_id) in tasks {
                     let key = format!("{}:tasks", self.prefix);

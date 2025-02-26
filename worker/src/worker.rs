@@ -67,7 +67,7 @@ impl Worker {
                 if let Err(e) = manager.submit_heartbeat(&worker_id).await {
                     eprintln!("Error: {:?}", e);
                 }
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             }
         });
 
