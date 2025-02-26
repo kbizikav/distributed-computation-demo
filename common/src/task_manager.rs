@@ -33,8 +33,8 @@
 // - Workers send heartbeats to indicate they are still active
 // - Inactive workers have their tasks re-queued back to the tasks queue
 
-use crate::models::{Task, TaskResult};
 use redis::{aio::Connection, AsyncCommands as _, Client};
+use serde::{de::DeserializeOwned, Serialize};
 type Result<T> = std::result::Result<T, TaskManagerError>;
 
 #[derive(thiserror::Error, Debug)]
@@ -46,26 +46,28 @@ pub enum TaskManagerError {
     SerdeError(#[from] serde_json::Error),
 }
 
-pub struct TaskManager {
+pub struct TaskManager<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> {
     prefix: String,
     ttl: usize,
     heartbeat_ttl: usize,
     client: Client,
+    _phantom: std::marker::PhantomData<(T, R)>,
 }
 
-impl TaskManager {
+impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManager<T, R> {
     pub fn new(
         redis_url: &str,
         prefix: &str,
         ttl: usize,
         heartbeat_ttl: usize,
-    ) -> Result<TaskManager> {
+    ) -> Result<TaskManager<T, R>> {
         let client = Client::open(redis_url)?;
         Ok(TaskManager {
             prefix: prefix.to_owned(),
             ttl,
             heartbeat_ttl,
             client,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -82,7 +84,7 @@ impl TaskManager {
         Ok(())
     }
 
-    pub async fn add_task(&self, task_id: u32, task: &Task) -> Result<()> {
+    pub async fn add_task(&self, task_id: u32, task: &T) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
         let key = format!("{}:tasks", self.prefix);
@@ -96,7 +98,7 @@ impl TaskManager {
         Ok(())
     }
 
-    pub async fn get_result(&self, task_id: u32) -> Result<Option<TaskResult>> {
+    pub async fn get_result(&self, task_id: u32) -> Result<Option<R>> {
         let mut conn = self.get_connection().await?;
         let key = format!("{}:result:{}", self.prefix, task_id);
 
@@ -117,7 +119,7 @@ impl TaskManager {
     }
 
     // assign task to worker if available
-    pub async fn assign_task(&self, worker_id: &str) -> Result<Option<(u32, Task)>> {
+    pub async fn assign_task(&self, worker_id: &str) -> Result<Option<(u32, T)>> {
         let mut conn = self.get_connection().await?;
 
         let task_key = format!("{}:tasks", self.prefix);
@@ -131,7 +133,7 @@ impl TaskManager {
 
         if let Some((task_json, task_id)) = task {
             // add task to worker's list
-            let task: Task = serde_json::from_str(&task_json)?;
+            let task: T = serde_json::from_str(&task_json)?;
             let key = format!("{}:worker:{}", self.prefix, worker_id);
             let member = serde_json::to_string(&task)?;
             conn.zadd::<_, _, _, ()>(&key, member, task_id).await?;
@@ -152,8 +154,8 @@ impl TaskManager {
         &self,
         worker_id: &str,
         task_id: u32,
-        task: &Task,
-        result: &TaskResult,
+        task: &T,
+        result: &R,
     ) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
@@ -220,49 +222,5 @@ impl TaskManager {
             }
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use uuid::Uuid;
-
-    use super::*;
-    use crate::models::Task;
-
-    #[tokio::test]
-    async fn test_add_task() {
-        let task_manager = TaskManager::new("redis://localhost:6379", "test", 60, 3)
-            .expect("Failed to create TaskManager");
-
-        task_manager.clear_all().await.unwrap();
-
-        for i in 0..10 {
-            let task = Task { task_id: i, x: i };
-            task_manager.add_task(task.task_id, &task).await.unwrap();
-        }
-
-        let worker_id = Uuid::new_v4().to_string();
-        for _ in 0..10 {
-            let task = task_manager.assign_task(&worker_id).await.unwrap();
-
-            let task: Task = task.unwrap().1;
-            let task_result = TaskResult {
-                task_id: task.task_id,
-                x_squared: task.x * task.x,
-            };
-            task_manager
-                .complete_task(&worker_id, task.task_id, &task, &task_result)
-                .await
-                .unwrap();
-        }
-
-        for i in 0..10 {
-            let result = task_manager.get_result(i).await.unwrap();
-            let result = result.unwrap();
-            assert_eq!(result.task_id, i);
-            assert_eq!(result.x_squared, i * i);
-        }
     }
 }

@@ -6,7 +6,7 @@ use crate::EnvVar;
 
 #[derive(Clone)]
 pub struct Producer {
-    manager: Arc<TaskManager>,
+    manager: Arc<TaskManager<Task, TaskResult>>,
     results: Arc<Mutex<Vec<TaskResult>>>,
 }
 

@@ -1,4 +1,4 @@
-use common::models::TaskResult;
+use common::models::{Task, TaskResult};
 use common::task_manager::TaskManager;
 use std::sync::Arc;
 use std::thread;
@@ -10,7 +10,7 @@ use crate::EnvVar;
 #[derive(Clone)]
 pub struct Worker {
     pub worker_id: String,
-    pub manager: Arc<TaskManager>,
+    pub manager: Arc<TaskManager<Task, TaskResult>>,
 }
 
 impl Worker {
