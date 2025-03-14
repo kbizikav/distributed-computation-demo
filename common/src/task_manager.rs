@@ -1,37 +1,42 @@
 // Data Structure in Redis:
 //
-// 1. Tasks Queue:
+// 1. Task Hash:
 //    - Key: {prefix}:tasks
-//    - Type: Sorted Set
-//    - Members: task_json (serialized Task objects)
-//    - Scores: task_id
+//    - Type: HSET
+//    - Field: {task_id}
+//    - Value: task_json (serialized Task object)
 //    - TTL: {ttl} seconds
 //
-// 2. Worker Assigned Tasks:
-//    - Key: {prefix}:worker:{worker_id}
-//    - Type: Sorted Set
-//    - Members: task_json (serialized Task objects)
-//    - Scores: task_id
+// 2. Pending Tasks:
+//    - Key: {prefix}:tasks:pending
+//    - Type: Set
+//    - Members: {task_id}
 //    - TTL: {ttl} seconds
 //
-// 3. Task Results:
-//    - Key: {prefix}:result:{task_id}
-//    - Type: String
+// 3. Running Tasks:
+//   - Key: {prefix}:tasks:running
+//   - Type: Set
+//   - Members: {task_id}
+//   - TTL: {ttl} seconds
+//
+// 4. Completed Tasks:
+//    - Key: {prefix}:tasks:completed
+//    - Type: Set
+//    - Members: {task_id}
+//    - TTL: {ttl} seconds
+//
+// 5. Results Hash:
+//    - Key: {prefix}:results
+//    - Type: HSET
+//    - Field: {task_id}
 //    - Value: result_json (serialized TaskResult object)
 //    - TTL: {ttl} seconds
 //
-// 4. Worker Heartbeats:
-//    - Key: {prefix}:heartbeat:{worker_id}
+// 6. Worker Heartbeats:
+//    - Key: {prefix}:heartbeat:{task_id}
 //    - Type: String
-//    - Value: "" (empty string)
+//    - Value: {worker_id}
 //    - TTL: {heartbeat_ttl} seconds
-//
-// Flow:
-// - Tasks are initially added to the tasks queue
-// - Workers request tasks which are moved from tasks queue to worker's task list
-// - When tasks are completed, they are removed from worker's list and results are stored
-// - Workers send heartbeats to indicate they are still active
-// - Inactive workers have their tasks re-queued back to the tasks queue
 
 use redis::{aio::Connection, AsyncCommands as _, Client};
 use serde::{de::DeserializeOwned, Serialize};
@@ -88,86 +93,96 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
         let mut conn = self.get_connection().await?;
 
         let key = format!("{}:tasks", self.prefix);
-        let member = serde_json::to_string(task)?;
-        conn.zadd::<_, _, _, ()>(&key, member, task_id as f64)
-            .await?;
+        let task_json = serde_json::to_string(task)?;
+
+        // add task to tasks hash
+        conn.hset::<_, _, _, ()>(&key, task_id, task_json).await?;
+
+        // add task to pending tasks set
+        let pending_key = format!("{}:tasks:pending", self.prefix);
+        conn.sadd::<_, _, ()>(&pending_key, task_id).await?;
 
         // set expiration
         conn.expire::<_, ()>(&key, self.ttl).await?;
+        conn.expire::<_, ()>(&pending_key, self.ttl).await?;
 
         Ok(())
     }
 
     pub async fn get_result(&self, task_id: u32) -> Result<Option<R>> {
         let mut conn = self.get_connection().await?;
-        let key = format!("{}:result:{}", self.prefix, task_id);
-
-        let exists: bool = conn.exists(&key).await?;
-        if !exists {
-            return Ok(None);
-        }
-
-        let result_json: String = conn.get(&key).await?;
-        Ok(Some(serde_json::from_str(&result_json)?))
-    }
-
-    pub async fn remove_result(&self, task_id: u32) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-        let key = format!("{}:result:{}", self.prefix, task_id);
-        conn.del::<_, ()>(key).await?;
-        Ok(())
-    }
-
-    // assign task to worker if available
-    pub async fn assign_task(&self, worker_id: &str) -> Result<Option<(u32, T)>> {
-        let mut conn = self.get_connection().await?;
-
-        let task_key = format!("{}:tasks", self.prefix);
-
-        // get task from sorted set
-        let task: Option<(String, f64)> = conn
-            .zpopmin::<_, Vec<(String, f64)>>(&task_key, 1)
-            .await?
-            .into_iter()
-            .next();
-
-        if let Some((task_json, task_id)) = task {
-            // add task to worker's list
-            let task: T = serde_json::from_str(&task_json)?;
-            let key = format!("{}:worker:{}", self.prefix, worker_id);
-            let member = serde_json::to_string(&task)?;
-            conn.zadd::<_, _, _, ()>(&key, member, task_id).await?;
-
-            // set expiration
-            conn.expire::<_, ()>(&key, self.ttl).await?;
-
-            // remove task from tasks list
-            conn.zrem::<_, _, ()>(&task_key, task_json).await?;
-
-            Ok(Some((task_id as u32, task)))
+        let key = format!("{}:results", self.prefix);
+        let result_json: Option<String> = conn.hget(&key, task_id).await?;
+        if let Some(result_json) = result_json {
+            let result: R = serde_json::from_str(&result_json)?;
+            Ok(Some(result))
         } else {
             Ok(None)
         }
     }
 
-    pub async fn complete_task(
-        &self,
-        worker_id: &str,
-        task_id: u32,
-        task: &T,
-        result: &R,
-    ) -> Result<()> {
+    pub async fn remove_old_tasks(&self, to_task_id: u32) -> Result<()> {
+        let mut conn = self.get_connection().await?;
+        let tasks_key = format!("{}:tasks", self.prefix);
+        let results_key = format!("{}:results", self.prefix);
+        let task_ids: Vec<u32> = conn.hkeys(&tasks_key).await?;
+        for task_id in task_ids {
+            if task_id <= to_task_id {
+                let pending_key = format!("{}:tasks:pending", self.prefix);
+                let running_key = format!("{}:tasks:running", self.prefix);
+                let completed_key = format!("{}:tasks:completed", self.prefix);
+                conn.srem::<_, _, ()>(&pending_key, task_id).await?;
+                conn.srem::<_, _, ()>(&running_key, task_id).await?;
+                conn.srem::<_, _, ()>(&completed_key, task_id).await?;
+                conn.hdel::<_, _, ()>(&tasks_key, task_id).await?;
+                conn.hdel::<_, _, ()>(&results_key, task_id).await?;
+            }
+        }
+        Ok(())
+    }
+
+    // // assign task to worker if available
+    pub async fn assign_task(&self) -> Result<Option<(u32, T)>> {
         let mut conn = self.get_connection().await?;
 
-        // remove task from worker's list
-        let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
-        let task_json = serde_json::to_string(task)?;
-        conn.zrem::<_, _, ()>(worker_key, task_json).await?;
+        let pending_key = format!("{}:tasks:pending", self.prefix);
+        // get the smallest task id
+        let task_ids: Vec<u32> = redis::cmd("SORT")
+            .arg(&pending_key)
+            .arg("LIMIT")
+            .arg(0)
+            .arg(1)
+            .query_async(&mut conn)
+            .await?;
+        let task_id = task_ids.get(0).cloned();
+        if let Some(task_id) = task_id {
+            let task_key = format!("{}:tasks", self.prefix);
+            let task_json: String = conn.hget(&task_key, task_id).await?;
+            let task: T = serde_json::from_str(&task_json)?;
+            // move task from pending to running
+            let running_key = format!("{}:tasks:running", self.prefix);
+            conn.smove::<_, _, _, ()>(&pending_key, &running_key, task_id)
+                .await?;
+            Ok(Some((task_id, task)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn complete_task(&self, task_id: u32, result: &R) -> Result<()> {
+        let mut conn = self.get_connection().await?;
 
         // add result
-        let result_key = format!("{}:result:{}", self.prefix, task_id);
+        let result_key = format!("{}:results", self.prefix);
         let result_json = serde_json::to_string(result)?;
-        conn.set::<_, _, ()>(&result_key, result_json).await?;
+        conn.hset::<_, _, _, ()>(&result_key, task_id, result_json)
+            .await?;
+
+        // move task from running to completed
+        let running_key = format!("{}:tasks:running", self.prefix);
+        let completed_key = format!("{}:tasks:completed", self.prefix);
+        conn.smove::<_, _, _, ()>(&running_key, &completed_key, task_id)
+            .await?;
 
         // set expiration
         conn.expire::<_, ()>(&result_key, self.ttl).await?;
@@ -175,50 +190,29 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
         Ok(())
     }
 
-    pub async fn submit_heartbeat(&self, worker_id: &str) -> Result<()> {
+    pub async fn submit_heartbeat(&self, worker_id: &str, task_id: u32) -> Result<()> {
         let mut conn = self.get_connection().await?;
-
-        let key = format!("{}:heartbeat:{}", self.prefix, worker_id);
-        conn.set::<_, _, ()>(&key, "").await?;
-
-        // set expiration
-        conn.expire::<_, ()>(&key, self.heartbeat_ttl).await?;
-
+        let key = format!("{}:heartbeat:{}", self.prefix, task_id);
+        conn.set_ex::<_, _, ()>(&key, worker_id, self.heartbeat_ttl)
+            .await?;
         Ok(())
     }
 
-    // remove inactive workers and re-queue their tasks
-    pub async fn cleanup_inactive_workers(&self) -> Result<()> {
+    pub async fn cleanup_inactive_tasks(&self) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let worker_ids: Vec<String> = conn
-            .keys::<_, Vec<String>>(format!("{}:worker:*", self.prefix))
-            .await?
-            .into_iter()
-            .map(|key| key.split(':').last().unwrap().to_string())
-            .collect();
+        // get all running tasks
+        let running_key = format!("{}:tasks:running", self.prefix);
+        let pending_key = format!("{}:tasks:pending", self.prefix);
+        let task_ids: Vec<u32> = conn.smembers(&running_key).await?;
 
-        for worker_id in worker_ids {
-            let key = format!("{}:heartbeat:{}", self.prefix, worker_id);
-            let ttl: i64 = conn.ttl(&key).await?;
-            if ttl < 0 {
-                // re-queue tasks
-                let worker_key = format!("{}:worker:{}", self.prefix, worker_id);
-                let tasks: Vec<(String, f64)> = conn
-                    .zrangebyscore_withscores(&worker_key, 0.0, "+inf")
+        for task_id in task_ids {
+            let key = format!("{}:{}:heartbeat", self.prefix, task_id);
+            let worker_id: Option<String> = conn.get(&key).await?;
+            if worker_id.is_none() {
+                // move task from running to pending
+                conn.smove::<_, _, _, ()>(&running_key, &pending_key, task_id)
                     .await?;
-                for (task_json, task_id) in tasks {
-                    let key = format!("{}:tasks", self.prefix);
-                    conn.zadd::<_, _, _, ()>(&key, task_json, task_id).await?;
-
-                    // set expiration
-                    conn.expire::<_, ()>(&key, self.ttl).await?;
-
-                    log::info!("Re-queued task {} from worker {}", task_id, worker_id);
-                }
-
-                // remove worker
-                conn.del::<_, ()>(worker_key).await?;
             }
         }
         Ok(())
