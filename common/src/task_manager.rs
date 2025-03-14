@@ -92,19 +92,18 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
     pub async fn add_task(&self, task_id: u32, task: &T) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let key = format!("{}:tasks", self.prefix);
+        let tasks_key = format!("{}:tasks", self.prefix);
+        let pending_key = format!("{}:tasks:pending", self.prefix);
+
         let task_json = serde_json::to_string(task)?;
 
-        // add task to tasks hash
-        conn.hset::<_, _, _, ()>(&key, task_id, task_json).await?;
+        let mut pipe = redis::pipe();
+        pipe.hset(&tasks_key, task_id, task_json.clone())
+            .sadd(&pending_key, task_id)
+            .expire(&tasks_key, self.ttl)
+            .expire(&pending_key, self.ttl);
 
-        // add task to pending tasks set
-        let pending_key = format!("{}:tasks:pending", self.prefix);
-        conn.sadd::<_, _, ()>(&pending_key, task_id).await?;
-
-        // set expiration
-        conn.expire::<_, ()>(&key, self.ttl).await?;
-        conn.expire::<_, ()>(&pending_key, self.ttl).await?;
+        pipe.query_async::<_, ()>(&mut conn).await?;
 
         Ok(())
     }
@@ -159,7 +158,6 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
             let task_key = format!("{}:tasks", self.prefix);
             let task_json: String = conn.hget(&task_key, task_id).await?;
             let task: T = serde_json::from_str(&task_json)?;
-            // move task from pending to running
             let running_key = format!("{}:tasks:running", self.prefix);
             conn.smove::<_, _, _, ()>(&pending_key, &running_key, task_id)
                 .await?;
@@ -207,7 +205,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
         let task_ids: Vec<u32> = conn.smembers(&running_key).await?;
 
         for task_id in task_ids {
-            let key = format!("{}:{}:heartbeat", self.prefix, task_id);
+            let key = format!("{}:heartbeat:{}", self.prefix, task_id);
             let worker_id: Option<String> = conn.get(&key).await?;
             if worker_id.is_none() {
                 // move task from running to pending
