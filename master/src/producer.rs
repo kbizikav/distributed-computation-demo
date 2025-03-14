@@ -37,7 +37,7 @@ impl Producer {
             println!("Result processed for task {}", result.task_id,);
 
             // remove results
-            self.manager.remove_result(result.task_id).await?;
+            self.manager.remove_old_tasks(result.task_id).await?;
         }
     }
 
@@ -47,7 +47,7 @@ impl Producer {
 
         let manager = self.manager.clone();
         let supervisor_handle = tokio::spawn(async move {
-            if let Err(e) = manager.cleanup_inactive_workers().await {
+            if let Err(e) = manager.cleanup_inactive_tasks().await {
                 eprintln!("Supervisor error: {}", e);
             }
         });
@@ -64,16 +64,6 @@ impl Producer {
             }
         });
 
-        let manager = self.manager.clone();
-        let task_cleanup_handle = tokio::spawn(async move {
-            loop {
-                if let Err(e) = manager.cleanup_inactive_workers().await {
-                    eprintln!("Task cleanup error: {}", e);
-                }
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            }
-        });
-
         let producer = self.clone();
         let process_results_handle = tokio::spawn(async move {
             if let Err(e) = producer.process_results().await {
@@ -86,7 +76,6 @@ impl Producer {
         tokio::try_join!(
             supervisor_handle,
             task_generator_handle,
-            task_cleanup_handle,
             process_results_handle,
         )
         .unwrap();
