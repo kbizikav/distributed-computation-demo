@@ -21,8 +21,7 @@ const HEARTBEAT_INTERVAL: usize = 10;
 impl Worker {
     pub fn new(env: &EnvVar) -> anyhow::Result<Worker> {
         let worker_id = Uuid::new_v4().to_string();
-        let manager =
-            TaskManager::new(&env.redis_url, "task_manager", 600, HEARTBEAT_INTERVAL * 3)?;
+        let manager = TaskManager::new(&env.redis_url, "task_manager", 600, HEARTBEAT_INTERVAL)?;
         Ok(Worker {
             worker_id,
             manager: Arc::new(manager),

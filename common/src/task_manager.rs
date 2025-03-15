@@ -54,6 +54,7 @@ pub enum TaskManagerError {
 pub struct TaskManager<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> {
     prefix: String,
     ttl: usize,
+    heartbeat_interval: usize,
     heartbeat_ttl: usize,
     client: Client,
 
@@ -72,13 +73,14 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
         redis_url: &str,
         prefix: &str,
         ttl: usize,
-        heartbeat_ttl: usize,
+        heartbeat_interval: usize,
     ) -> Result<TaskManager<T, R>> {
         let client = Client::open(redis_url)?;
         Ok(TaskManager {
             prefix: prefix.to_owned(),
             ttl,
-            heartbeat_ttl,
+            heartbeat_interval,
+            heartbeat_ttl: heartbeat_interval * 3,
             client,
             tasks_key: format!("{}:tasks", prefix),
             pending_key: format!("{}:tasks:pending", prefix),
@@ -141,21 +143,6 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
 
         Ok(())
     }
-
-    // pub async fn add_task(&self, task_id: u32, task: &T) -> Result<()> {
-    //     let mut conn = self.get_connection().await?;
-    //     let task_json = serde_json::to_string(task)?;
-
-    //     let mut pipe = redis::pipe();
-    //     pipe.hset(&self.tasks_key, task_id, task_json.clone())
-    //         .sadd(&self.pending_key, task_id)
-    //         .expire(&self.tasks_key, self.ttl)
-    //         .expire(&self.pending_key, self.ttl);
-
-    //     pipe.query_async::<_, ()>(&mut conn).await?;
-
-    //     Ok(())
-    // }
 
     pub async fn check_task_exists(&self, task_id: u32) -> Result<bool> {
         let mut conn = self.get_connection().await?;
@@ -245,7 +232,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
     pub async fn submit_heartbeat(&self, worker_id: &str, task_id: u32) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let key = format!("{}:{}", self.heartbeat_prefix, task_id);
-        conn.set_ex::<_, _, ()>(&key, worker_id, self.heartbeat_ttl)
+        conn.set_ex::<_, _, ()>(&key, worker_id, self.heartbeat_interval * 3)
             .await?;
         Ok(())
     }
@@ -258,11 +245,8 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
             let task_ids: Vec<u32> = conn.smembers(&self.running_key).await?;
             log::info!("running tasks: {:?}", task_ids);
 
-            // wait heartbeat_ttl * 3 seconds for worker to submit heartbeat
-            tokio::time::sleep(tokio::time::Duration::from_secs(
-                (self.heartbeat_ttl * 3) as u64,
-            ))
-            .await;
+            // wait heartbeat_ttl seconds for worker to submit heartbeat
+            tokio::time::sleep(tokio::time::Duration::from_secs(self.heartbeat_ttl as u64)).await;
 
             for task_id in task_ids {
                 let key = format!("{}:{}", self.heartbeat_prefix, task_id);
