@@ -63,7 +63,7 @@ pub struct TaskManager<T: Serialize + DeserializeOwned, R: Serialize + Deseriali
     running_key: String,
     completed_key: String,
     results_key: String,
-    heartbeat_key: fn(u32) -> String,
+    heartbeat_prefix: String,
     _phantom: std::marker::PhantomData<(T, R)>,
 }
 
@@ -85,7 +85,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
             running_key: format!("{}:tasks:running", prefix),
             completed_key: format!("{}:tasks:completed", prefix),
             results_key: format!("{}:results", prefix),
-            heartbeat_key: |task_id| format!("{}:heartbeat:{}", prefix, task_id),
+            heartbeat_prefix: format!("{}:heartbeat", prefix),
             _phantom: std::marker::PhantomData,
         })
     }
@@ -205,7 +205,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
 
     pub async fn submit_heartbeat(&self, worker_id: &str, task_id: u32) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        let key = format!("{}:heartbeat:{}", self.prefix, task_id);
+        let key = format!("{}:{}", self.heartbeat_prefix, task_id);
         conn.set_ex::<_, _, ()>(&key, worker_id, self.heartbeat_ttl)
             .await?;
         Ok(())
@@ -217,7 +217,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
         loop {
             // get all running tasks
             let task_ids: Vec<u32> = conn.smembers(&self.running_key).await?;
-            log::info!("Running tasks: {:?}", task_ids);
+            log::info!("running tasks: {:?}", task_ids);
 
             // wait heartbeat_ttl * 3 seconds for worker to submit heartbeat
             tokio::time::sleep(tokio::time::Duration::from_secs(
@@ -226,7 +226,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
             .await;
 
             for task_id in task_ids {
-                let key = format!("{}:heartbeat:{}", self.prefix, task_id);
+                let key = format!("{}:{}", self.heartbeat_prefix, task_id);
                 let worker_id: Option<String> = conn.get(&key).await?;
                 if worker_id.is_none() {
                     // move task from running to pending
