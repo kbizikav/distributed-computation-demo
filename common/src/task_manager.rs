@@ -56,6 +56,14 @@ pub struct TaskManager<T: Serialize + DeserializeOwned, R: Serialize + Deseriali
     ttl: usize,
     heartbeat_ttl: usize,
     client: Client,
+
+    // keys
+    tasks_key: String,
+    pending_key: String,
+    running_key: String,
+    completed_key: String,
+    results_key: String,
+    heartbeat_key: fn(u32) -> String,
     _phantom: std::marker::PhantomData<(T, R)>,
 }
 
@@ -72,6 +80,12 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
             ttl,
             heartbeat_ttl,
             client,
+            tasks_key: format!("{}:tasks", prefix),
+            pending_key: format!("{}:tasks:pending", prefix),
+            running_key: format!("{}:tasks:running", prefix),
+            completed_key: format!("{}:tasks:completed", prefix),
+            results_key: format!("{}:results", prefix),
+            heartbeat_key: |task_id| format!("{}:heartbeat:{}", prefix, task_id),
             _phantom: std::marker::PhantomData,
         })
     }
@@ -91,17 +105,13 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
 
     pub async fn add_task(&self, task_id: u32, task: &T) -> Result<()> {
         let mut conn = self.get_connection().await?;
-
-        let tasks_key = format!("{}:tasks", self.prefix);
-        let pending_key = format!("{}:tasks:pending", self.prefix);
-
         let task_json = serde_json::to_string(task)?;
 
         let mut pipe = redis::pipe();
-        pipe.hset(&tasks_key, task_id, task_json.clone())
-            .sadd(&pending_key, task_id)
-            .expire(&tasks_key, self.ttl)
-            .expire(&pending_key, self.ttl);
+        pipe.hset(&self.tasks_key, task_id, task_json.clone())
+            .sadd(&self.pending_key, task_id)
+            .expire(&self.tasks_key, self.ttl)
+            .expire(&self.pending_key, self.ttl);
 
         pipe.query_async::<_, ()>(&mut conn).await?;
 
@@ -110,15 +120,13 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
 
     pub async fn check_task_exists(&self, task_id: u32) -> Result<bool> {
         let mut conn = self.get_connection().await?;
-        let tasks_key = format!("{}:tasks", self.prefix);
-        let exists: bool = conn.hexists(&tasks_key, task_id).await?;
+        let exists: bool = conn.hexists(&self.tasks_key, task_id).await?;
         Ok(exists)
     }
 
     pub async fn get_result(&self, task_id: u32) -> Result<Option<R>> {
         let mut conn = self.get_connection().await?;
-        let key = format!("{}:results", self.prefix);
-        let result_json: Option<String> = conn.hget(&key, task_id).await?;
+        let result_json: Option<String> = conn.hget(&self.results_key, task_id).await?;
         if let Some(result_json) = result_json {
             let result: R = serde_json::from_str(&result_json)?;
             Ok(Some(result))
@@ -129,46 +137,50 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
 
     pub async fn remove_old_tasks(&self, to_task_id: u32) -> Result<()> {
         let mut conn = self.get_connection().await?;
-        let tasks_key = format!("{}:tasks", self.prefix);
-        let results_key = format!("{}:results", self.prefix);
-        let task_ids: Vec<u32> = conn.hkeys(&tasks_key).await?;
+        let task_ids: Vec<u32> = conn.hkeys(&self.tasks_key).await?;
         for task_id in task_ids {
             if task_id <= to_task_id {
-                let pending_key = format!("{}:tasks:pending", self.prefix);
-                let running_key = format!("{}:tasks:running", self.prefix);
-                let completed_key = format!("{}:tasks:completed", self.prefix);
-                conn.srem::<_, _, ()>(&pending_key, task_id).await?;
-                conn.srem::<_, _, ()>(&running_key, task_id).await?;
-                conn.srem::<_, _, ()>(&completed_key, task_id).await?;
-                conn.hdel::<_, _, ()>(&tasks_key, task_id).await?;
-                conn.hdel::<_, _, ()>(&results_key, task_id).await?;
+                let mut pipe = redis::pipe();
+                pipe.srem(&self.pending_key, task_id)
+                    .srem(&self.running_key, task_id)
+                    .srem(&self.completed_key, task_id)
+                    .hdel(&self.tasks_key, task_id)
+                    .hdel(&self.results_key, task_id);
+                pipe.query_async::<_, ()>(&mut conn).await?;
             }
         }
         Ok(())
     }
 
-    // // assign task to worker if available
+    // assign task to worker if available
     pub async fn assign_task(&self) -> Result<Option<(u32, T)>> {
         let mut conn = self.get_connection().await?;
 
-        let pending_key = format!("{}:tasks:pending", self.prefix);
-        // get the smallest task id
-        let task_ids: Vec<u32> = redis::cmd("SORT")
-            .arg(&pending_key)
-            .arg("LIMIT")
-            .arg(0)
-            .arg(1)
-            .query_async(&mut conn)
+        let script = redis::Script::new(
+            r"
+            local task_ids = redis.call('SORT', KEYS[1], 'LIMIT', 0, 1)
+            if #task_ids == 0 then
+                return nil
+            end
+            local task_id = task_ids[1]
+            local task_json = redis.call('HGET', KEYS[3], task_id)
+            redis.call('SMOVE', KEYS[1], KEYS[2], task_id)
+            redis.call('EXPIRE', KEYS[2], ARGV[1])
+
+            return {task_id, task_json}
+        ",
+        );
+
+        let result: Option<(u32, String)> = script
+            .key(&self.pending_key)
+            .key(&self.running_key)
+            .key(&self.tasks_key)
+            .arg(self.ttl)
+            .invoke_async(&mut conn)
             .await?;
-        let task_id = task_ids.get(0).cloned();
-        if let Some(task_id) = task_id {
-            let task_key = format!("{}:tasks", self.prefix);
-            let task_json: String = conn.hget(&task_key, task_id).await?;
+
+        if let Some((task_id, task_json)) = result {
             let task: T = serde_json::from_str(&task_json)?;
-            let running_key = format!("{}:tasks:running", self.prefix);
-            conn.smove::<_, _, _, ()>(&pending_key, &running_key, task_id)
-                .await?;
-            conn.expire::<_, ()>(&running_key, self.ttl).await?;
             Ok(Some((task_id, task)))
         } else {
             Ok(None)
@@ -177,22 +189,16 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
 
     pub async fn complete_task(&self, task_id: u32, result: &R) -> Result<()> {
         let mut conn = self.get_connection().await?;
-
-        // add result
-        let result_key = format!("{}:results", self.prefix);
         let result_json = serde_json::to_string(result)?;
-        conn.hset::<_, _, _, ()>(&result_key, task_id, result_json)
-            .await?;
 
-        // move task from running to completed
-        let running_key = format!("{}:tasks:running", self.prefix);
-        let completed_key = format!("{}:tasks:completed", self.prefix);
-        conn.smove::<_, _, _, ()>(&running_key, &completed_key, task_id)
-            .await?;
+        let mut pipe = redis::pipe();
 
-        // set expiration
-        conn.expire::<_, ()>(&completed_key, self.ttl).await?;
-        conn.expire::<_, ()>(&result_key, self.ttl).await?;
+        pipe.hset(&self.results_key, task_id, &result_json)
+            .smove(&self.running_key, &self.completed_key, task_id)
+            .expire(&self.completed_key, self.ttl)
+            .expire(&self.results_key, self.ttl);
+
+        pipe.query_async::<_, ()>(&mut conn).await?;
 
         Ok(())
     }
@@ -210,11 +216,10 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
 
         loop {
             // get all running tasks
-
-            let running_key = format!("{}:tasks:running", self.prefix);
-            let pending_key = format!("{}:tasks:pending", self.prefix);
-            let task_ids: Vec<u32> = conn.smembers(&running_key).await?;
+            let task_ids: Vec<u32> = conn.smembers(&self.running_key).await?;
             log::info!("Running tasks: {:?}", task_ids);
+
+            // wait heartbeat_ttl * 3 seconds for worker to submit heartbeat
             tokio::time::sleep(tokio::time::Duration::from_secs(
                 (self.heartbeat_ttl * 3) as u64,
             ))
@@ -225,7 +230,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
                 let worker_id: Option<String> = conn.get(&key).await?;
                 if worker_id.is_none() {
                     // move task from running to pending
-                    conn.smove::<_, _, _, ()>(&running_key, &pending_key, task_id)
+                    conn.smove::<_, _, _, ()>(&self.running_key, &self.pending_key, task_id)
                         .await?;
                     log::warn!("task {} moved from running to pending", task_id);
                 }
