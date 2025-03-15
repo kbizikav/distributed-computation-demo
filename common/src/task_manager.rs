@@ -108,6 +108,13 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
         Ok(())
     }
 
+    pub async fn check_task_exists(&self, task_id: u32) -> Result<bool> {
+        let mut conn = self.get_connection().await?;
+        let tasks_key = format!("{}:tasks", self.prefix);
+        let exists: bool = conn.hexists(&tasks_key, task_id).await?;
+        Ok(exists)
+    }
+
     pub async fn get_result(&self, task_id: u32) -> Result<Option<R>> {
         let mut conn = self.get_connection().await?;
         let key = format!("{}:results", self.prefix);
@@ -161,6 +168,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
             let running_key = format!("{}:tasks:running", self.prefix);
             conn.smove::<_, _, _, ()>(&pending_key, &running_key, task_id)
                 .await?;
+            conn.expire::<_, ()>(&running_key, self.ttl).await?;
             Ok(Some((task_id, task)))
         } else {
             Ok(None)
@@ -183,6 +191,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
             .await?;
 
         // set expiration
+        conn.expire::<_, ()>(&completed_key, self.ttl).await?;
         conn.expire::<_, ()>(&result_key, self.ttl).await?;
 
         Ok(())
@@ -199,20 +208,28 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
     pub async fn cleanup_inactive_tasks(&self) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        // get all running tasks
-        let running_key = format!("{}:tasks:running", self.prefix);
-        let pending_key = format!("{}:tasks:pending", self.prefix);
-        let task_ids: Vec<u32> = conn.smembers(&running_key).await?;
+        loop {
+            // get all running tasks
 
-        for task_id in task_ids {
-            let key = format!("{}:heartbeat:{}", self.prefix, task_id);
-            let worker_id: Option<String> = conn.get(&key).await?;
-            if worker_id.is_none() {
-                // move task from running to pending
-                conn.smove::<_, _, _, ()>(&running_key, &pending_key, task_id)
-                    .await?;
+            let running_key = format!("{}:tasks:running", self.prefix);
+            let pending_key = format!("{}:tasks:pending", self.prefix);
+            let task_ids: Vec<u32> = conn.smembers(&running_key).await?;
+            log::info!("Running tasks: {:?}", task_ids);
+            tokio::time::sleep(tokio::time::Duration::from_secs(
+                (self.heartbeat_ttl * 3) as u64,
+            ))
+            .await;
+
+            for task_id in task_ids {
+                let key = format!("{}:heartbeat:{}", self.prefix, task_id);
+                let worker_id: Option<String> = conn.get(&key).await?;
+                if worker_id.is_none() {
+                    // move task from running to pending
+                    conn.smove::<_, _, _, ()>(&running_key, &pending_key, task_id)
+                        .await?;
+                    log::warn!("task {} moved from running to pending", task_id);
+                }
             }
         }
-        Ok(())
     }
 }
