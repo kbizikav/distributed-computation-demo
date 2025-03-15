@@ -54,7 +54,6 @@ pub enum TaskManagerError {
 pub struct TaskManager<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> {
     prefix: String,
     ttl: usize,
-    heartbeat_interval: usize,
     heartbeat_ttl: usize,
     client: Client,
 
@@ -79,7 +78,6 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
         Ok(TaskManager {
             prefix: prefix.to_owned(),
             ttl,
-            heartbeat_interval,
             heartbeat_ttl: heartbeat_interval * 3,
             client,
             tasks_key: format!("{}:tasks", prefix),
@@ -232,8 +230,7 @@ impl<T: Serialize + DeserializeOwned, R: Serialize + DeserializeOwned> TaskManag
     pub async fn submit_heartbeat(&self, worker_id: &str, task_id: u32) -> Result<()> {
         let mut conn = self.get_connection().await?;
         let key = format!("{}:{}", self.heartbeat_prefix, task_id);
-        conn.set_ex::<_, _, ()>(&key, worker_id, self.heartbeat_interval * 3)
-            .await?;
+        conn.set_ex::<_, _, ()>(&key, worker_id, self.heartbeat_ttl).await?;
         Ok(())
     }
 
