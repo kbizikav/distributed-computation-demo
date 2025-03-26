@@ -1,6 +1,8 @@
 use common::models::{Task, TaskResult};
 use common::task_manager::TaskManager;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::time::sleep;
 
 use crate::EnvVar;
 
@@ -26,15 +28,16 @@ impl Producer {
             let result = match self.manager.get_result(next_task_id).await? {
                 Some(result) => result,
                 None => {
-                    log::warn!("No result found for task {}", next_task_id);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                     continue;
                 }
             };
 
+            sleep(Duration::from_secs(10)).await;
+
             // store result
             self.results.lock().unwrap().push(result.clone());
-            println!("Result processed for task {}", result.task_id,);
+            println!("✅ result processed for task {} ", result.task_id,);
 
             // remove results
             self.manager.remove_old_tasks(result.task_id).await?;

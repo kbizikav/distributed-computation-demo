@@ -35,7 +35,6 @@ impl Worker {
 
             if task.is_none() {
                 thread::sleep(Duration::from_secs(1));
-                log::info!("No task assigned");
                 continue;
             }
             let (task_id, task) = task.unwrap();
